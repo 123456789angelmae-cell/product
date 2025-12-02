@@ -1,12 +1,15 @@
 const express = require('express');
 const mongoose = require('mongoose');
 const cors = require('cors');
+const jwt = require('jsonwebtoken');
+
 const app = express();
 app.use(cors());
 app.use(express.json());
 
 //mongodb
 const DB_URL = 'mongodb+srv://raven:12345@test.q3j1urd.mongodb.net/Products';
+const JWT_SECRET = '12345';
 
 mongoose.connect(DB_URL)
     .then(() => console.log('✓ Connected to Database'))
@@ -24,6 +27,45 @@ const productSchema = new mongoose.Schema({
 });
 
 const Product = mongoose.model('Product', productSchema);
+
+// Middleware to verify JWT token
+const verifyToken = (req, res, next) => {
+    const token = req.headers['authorization']?.split(' ')[1];
+    
+    if (!token) {
+        return res.status(403).json({
+            success: false,
+            message: 'No token provided'
+        });
+    }
+    
+    jwt.verify(token, JWT_SECRET, (err, decoded) => {
+        if (err) {
+            return res.status(401).json({
+                success: false,
+                message: 'Invalid token'
+            });
+        }
+        req.userId = decoded.id;
+        req.userRole = decoded.role;
+        next();
+    });
+};
+
+// Middleware to verify admin role
+const verifyAdmin = (req, res, next) => {
+    if (req.userRole !== 'admin') {
+        return res.status(403).json({
+            success: false,
+            message: 'Access denied. Admin only.'
+        });
+    }
+    next();
+};
+
+// ============================================
+// PUBLIC ROUTES (No authentication required)
+// ============================================
 
 //get all products with pagination
 app.get('/api/products', async (req, res) => {
@@ -59,21 +101,22 @@ app.get('/api/products', async (req, res) => {
     }
 });
 
-//product by id
-app.get('/api/products/:id', async (req, res) => {
+//search products (MOVED BEFORE :id route)
+app.get('/api/products/search/:keyword', async (req, res) => {
     try {
-        const product = await Product.findById(req.params.id);
+        const keyword = req.params.keyword;
         
-        if (!product) {
-            return res.status(404).json({
-                success: false,
-                message: 'Product not found'
-            });
-        }
+        const products = await Product.find({
+            $or: [
+                { sku: { $regex: keyword, $options: 'i' } },
+                { name: { $regex: keyword, $options: 'i' } },
+                { category: { $regex: keyword, $options: 'i' } }
+            ]
+        });
         
         res.json({
             success: true,
-            data: product
+            data: products
         });
     } catch (error) {
         res.status(500).json({
@@ -181,6 +224,38 @@ app.get('/api/products/filter/price', async (req, res) => {
     }
 });
 
+//in stock filter
+app.get('/api/products/filter/instock', async (req, res) => {
+    try {
+        const products = await Product.find({ quantity: { $gt: 0 } });
+        res.json({
+            success: true,
+            data: products
+        });
+    } catch (error) {
+        res.status(500).json({
+            success: false,
+            message: error.message
+        });
+    }
+});
+
+//out of stock filter
+app.get('/api/products/filter/outofstock', async (req, res) => {
+    try {
+        const products = await Product.find({ quantity: 0 });
+        res.json({
+            success: true,
+            data: products
+        });
+    } catch (error) {
+        res.status(500).json({
+            success: false,
+            message: error.message
+        });
+    }
+});
+
 //sort products
 app.get('/api/products/sort/:field/:order', async (req, res) => {
     try {
@@ -204,8 +279,36 @@ app.get('/api/products/sort/:field/:order', async (req, res) => {
     }
 });
 
-//create product
-app.post('/api/products', async (req, res) => {
+//product by id
+app.get('/api/products/:id', async (req, res) => {
+    try {
+        const product = await Product.findById(req.params.id);
+        
+        if (!product) {
+            return res.status(404).json({
+                success: false,
+                message: 'Product not found'
+            });
+        }
+        
+        res.json({
+            success: true,
+            data: product
+        });
+    } catch (error) {
+        res.status(500).json({
+            success: false,
+            message: error.message
+        });
+    }
+});
+
+// ============================================
+// ADMIN ONLY ROUTES (Authentication required)
+// ============================================
+
+//create product (ADMIN ONLY)
+app.post('/api/products', verifyToken, verifyAdmin, async (req, res) => {
     try {
         const newProduct = new Product({
             sku: req.body.sku,
@@ -232,8 +335,8 @@ app.post('/api/products', async (req, res) => {
     }
 });
 
-//update product
-app.put('/api/products/:id', async (req, res) => {
+//update product (ADMIN ONLY)
+app.put('/api/products/:id', verifyToken, verifyAdmin, async (req, res) => {
     try {
         const updatedProduct = await Product.findByIdAndUpdate(
             req.params.id,
@@ -269,8 +372,8 @@ app.put('/api/products/:id', async (req, res) => {
     }
 });
 
-//bulk update stock
-app.put('/api/products/bulk-update-stock', async (req, res) => {
+//bulk update stock (ADMIN ONLY)
+app.put('/api/products/bulk-update-stock', verifyToken, verifyAdmin, async (req, res) => {
     try {
         const updates = req.body.updates; // [{id, quantity}, ...]
         
@@ -297,8 +400,8 @@ app.put('/api/products/bulk-update-stock', async (req, res) => {
     }
 });
 
-//delete product
-app.delete('/api/products/:id', async (req, res) => {
+//delete product (ADMIN ONLY)
+app.delete('/api/products/:id', verifyToken, verifyAdmin, async (req, res) => {
     try {
         const deletedProduct = await Product.findByIdAndDelete(req.params.id);
         
@@ -313,63 +416,6 @@ app.delete('/api/products/:id', async (req, res) => {
             success: true,
             message: 'Product deleted!',
             data: deletedProduct
-        });
-    } catch (error) {
-        res.status(500).json({
-            success: false,
-            message: error.message
-        });
-    }
-});
-
-//search products
-app.get('/api/products/search/:keyword', async (req, res) => {
-    try {
-        const keyword = req.params.keyword;
-        
-        const products = await Product.find({
-            $or: [
-                { sku: { $regex: keyword, $options: 'i' } },
-                { name: { $regex: keyword, $options: 'i' } },
-                { category: { $regex: keyword, $options: 'i' } }
-            ]
-        });
-        
-        res.json({
-            success: true,
-            data: products
-        });
-    } catch (error) {
-        res.status(500).json({
-            success: false,
-            message: error.message
-        });
-    }
-});
-
-//in stock filter
-app.get('/api/products/filter/instock', async (req, res) => {
-    try {
-        const products = await Product.find({ quantity: { $gt: 0 } });
-        res.json({
-            success: true,
-            data: products
-        });
-    } catch (error) {
-        res.status(500).json({
-            success: false,
-            message: error.message
-        });
-    }
-});
-
-//out of stock filter
-app.get('/api/products/filter/outofstock', async (req, res) => {
-    try {
-        const products = await Product.find({ quantity: 0 });
-        res.json({
-            success: true,
-            data: products
         });
     } catch (error) {
         res.status(500).json({
