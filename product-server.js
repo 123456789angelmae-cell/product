@@ -7,23 +7,25 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-//mongodb
+// MongoDB Connection
 const DB_URL = 'mongodb+srv://Johnlee:12345@cluster0.aclepof.mongodb.net/';
 const JWT_SECRET = '12345';
 
 mongoose.connect(DB_URL)
-    .then(() => console.log('✓ Connected to Database'))
-    .catch(err => console.log('✗ Database Error:', err));
+    .then(() => console.log('Connected to Database'))
+    .catch(err => console.log('Database Error:', err));
 
-//schema/model
+// Updated Product Schema with description and imageUrl
 const productSchema = new mongoose.Schema({
-    sku: String,
-    name: String,
-    category: String,
-    quantity: Number,
-    unitPrice: Number,
-    expiry: Date,
-    active: Boolean
+    name: { type: String, required: true },
+    description: { type: String, default: '' },
+    category: { type: String, default: 'Uncategorized' },
+    quantity: { type: Number, required: true, default: 0 },
+    unitPrice: { type: Number, required: true },
+    imageUrl: { type: String, default: '' },
+    active: { type: Boolean, default: true },
+    createdAt: { type: Date, default: Date.now },
+    updatedAt: { type: Date, default: Date.now }
 });
 
 const Product = mongoose.model('Product', productSchema);
@@ -67,21 +69,21 @@ const verifyAdmin = (req, res, next) => {
 // PUBLIC ROUTES (No authentication required)
 // ============================================
 
-//get all products with pagination
+// Get all products with pagination
 app.get('/api/products', async (req, res) => {
     try {
         const page = parseInt(req.query.page) || 1;
-        const limit = parseInt(req.query.limit) || 0; // 0 means no limit
+        const limit = parseInt(req.query.limit) || 0;
         const skip = (page - 1) * limit;
         
-        let query = Product.find();
+        let query = Product.find({ active: true });
         
         if (limit > 0) {
             query = query.skip(skip).limit(limit);
         }
         
-        const products = await query;
-        const total = await Product.countDocuments();
+        const products = await query.sort({ createdAt: -1 });
+        const total = await Product.countDocuments({ active: true });
         
         res.json({
             success: true,
@@ -101,15 +103,16 @@ app.get('/api/products', async (req, res) => {
     }
 });
 
-//search products (MOVED BEFORE :id route)
+// Search products
 app.get('/api/products/search/:keyword', async (req, res) => {
     try {
         const keyword = req.params.keyword;
         
         const products = await Product.find({
+            active: true,
             $or: [
-                { sku: { $regex: keyword, $options: 'i' } },
                 { name: { $regex: keyword, $options: 'i' } },
+                { description: { $regex: keyword, $options: 'i' } },
                 { category: { $regex: keyword, $options: 'i' } }
             ]
         });
@@ -126,10 +129,11 @@ app.get('/api/products/search/:keyword', async (req, res) => {
     }
 });
 
-//get products by category
+// Get products by category
 app.get('/api/products/category/:category', async (req, res) => {
     try {
         const products = await Product.find({ 
+            active: true,
             category: { $regex: req.params.category, $options: 'i' } 
         });
         
@@ -145,7 +149,7 @@ app.get('/api/products/category/:category', async (req, res) => {
     }
 });
 
-//get active products only
+// Get active products only
 app.get('/api/products/filter/active', async (req, res) => {
     try {
         const products = await Product.find({ active: true });
@@ -161,7 +165,7 @@ app.get('/api/products/filter/active', async (req, res) => {
     }
 });
 
-//low stock alert
+// Low stock alert
 app.get('/api/products/filter/lowstock/:threshold', async (req, res) => {
     try {
         const threshold = parseInt(req.params.threshold) || 10;
@@ -182,33 +186,14 @@ app.get('/api/products/filter/lowstock/:threshold', async (req, res) => {
     }
 });
 
-//expired products
-app.get('/api/products/filter/expired', async (req, res) => {
-    try {
-        const products = await Product.find({ 
-            expiry: { $lt: new Date() } 
-        });
-        
-        res.json({
-            success: true,
-            data: products,
-            count: products.length
-        });
-    } catch (error) {
-        res.status(500).json({
-            success: false,
-            message: error.message
-        });
-    }
-});
-
-//price range filter
+// Price range filter
 app.get('/api/products/filter/price', async (req, res) => {
     try {
         const minPrice = parseFloat(req.query.min) || 0;
         const maxPrice = parseFloat(req.query.max) || Number.MAX_VALUE;
         
         const products = await Product.find({ 
+            active: true,
             unitPrice: { $gte: minPrice, $lte: maxPrice } 
         });
         
@@ -224,10 +209,10 @@ app.get('/api/products/filter/price', async (req, res) => {
     }
 });
 
-//in stock filter
+// In stock filter
 app.get('/api/products/filter/instock', async (req, res) => {
     try {
-        const products = await Product.find({ quantity: { $gt: 0 } });
+        const products = await Product.find({ active: true, quantity: { $gt: 0 } });
         res.json({
             success: true,
             data: products
@@ -240,10 +225,10 @@ app.get('/api/products/filter/instock', async (req, res) => {
     }
 });
 
-//out of stock filter
+// Out of stock filter
 app.get('/api/products/filter/outofstock', async (req, res) => {
     try {
-        const products = await Product.find({ quantity: 0 });
+        const products = await Product.find({ active: true, quantity: 0 });
         res.json({
             success: true,
             data: products
@@ -256,16 +241,16 @@ app.get('/api/products/filter/outofstock', async (req, res) => {
     }
 });
 
-//sort products
+// Sort products
 app.get('/api/products/sort/:field/:order', async (req, res) => {
     try {
         const { field, order } = req.params;
         const sortOrder = order === 'desc' ? -1 : 1;
         
-        const validFields = ['name', 'unitPrice', 'quantity', 'category'];
+        const validFields = ['name', 'unitPrice', 'quantity', 'category', 'createdAt'];
         const sortField = validFields.includes(field) ? field : 'name';
         
-        const products = await Product.find().sort({ [sortField]: sortOrder });
+        const products = await Product.find({ active: true }).sort({ [sortField]: sortOrder });
         
         res.json({
             success: true,
@@ -279,7 +264,23 @@ app.get('/api/products/sort/:field/:order', async (req, res) => {
     }
 });
 
-//product by id
+// Get all categories
+app.get('/api/products/categories', async (req, res) => {
+    try {
+        const categories = await Product.distinct('category', { active: true });
+        res.json({
+            success: true,
+            data: categories.filter(c => c)
+        });
+    } catch (error) {
+        res.status(500).json({
+            success: false,
+            message: error.message
+        });
+    }
+});
+
+// Get product by ID
 app.get('/api/products/:id', async (req, res) => {
     try {
         const product = await Product.findById(req.params.id);
@@ -307,17 +308,17 @@ app.get('/api/products/:id', async (req, res) => {
 // ADMIN ONLY ROUTES (Authentication required)
 // ============================================
 
-//create product (ADMIN ONLY)
+// Create product (ADMIN ONLY)
 app.post('/api/products', verifyToken, verifyAdmin, async (req, res) => {
     try {
         const newProduct = new Product({
-            sku: req.body.sku,
             name: req.body.name,
-            category: req.body.category,
-            quantity: req.body.quantity,
+            description: req.body.description || '',
+            category: req.body.category || 'Uncategorized',
+            quantity: req.body.quantity || 0,
             unitPrice: req.body.unitPrice,
-            expiry: req.body.expiry,
-            active: req.body.active
+            imageUrl: req.body.imageUrl || '',
+            active: req.body.active !== undefined ? req.body.active : true
         });
         
         await newProduct.save();
@@ -335,19 +336,20 @@ app.post('/api/products', verifyToken, verifyAdmin, async (req, res) => {
     }
 });
 
-//update product (ADMIN ONLY)
+// Update product (ADMIN ONLY)
 app.put('/api/products/:id', verifyToken, verifyAdmin, async (req, res) => {
     try {
         const updatedProduct = await Product.findByIdAndUpdate(
             req.params.id,
             {
-                sku: req.body.sku,
                 name: req.body.name,
+                description: req.body.description,
                 category: req.body.category,
                 quantity: req.body.quantity,
                 unitPrice: req.body.unitPrice,
-                expiry: req.body.expiry,
-                active: req.body.active
+                imageUrl: req.body.imageUrl,
+                active: req.body.active,
+                updatedAt: Date.now()
             },
             { new: true }
         );
@@ -372,16 +374,16 @@ app.put('/api/products/:id', verifyToken, verifyAdmin, async (req, res) => {
     }
 });
 
-//bulk update stock (ADMIN ONLY)
+// Bulk update stock (ADMIN ONLY)
 app.put('/api/products/bulk-update-stock', verifyToken, verifyAdmin, async (req, res) => {
     try {
-        const updates = req.body.updates; // [{id, quantity}, ...]
+        const updates = req.body.updates;
         
         const results = await Promise.all(
             updates.map(async (update) => {
                 return await Product.findByIdAndUpdate(
                     update.id,
-                    { quantity: update.quantity },
+                    { quantity: update.quantity, updatedAt: Date.now() },
                     { new: true }
                 );
             })
@@ -400,7 +402,7 @@ app.put('/api/products/bulk-update-stock', verifyToken, verifyAdmin, async (req,
     }
 });
 
-//delete product (ADMIN ONLY)
+// Delete product (ADMIN ONLY)
 app.delete('/api/products/:id', verifyToken, verifyAdmin, async (req, res) => {
     try {
         const deletedProduct = await Product.findByIdAndDelete(req.params.id);
@@ -425,10 +427,9 @@ app.delete('/api/products/:id', verifyToken, verifyAdmin, async (req, res) => {
     }
 });
 
-//server start
+// Server start
 const PORT = 3000;
 app.listen(PORT, () => {
-    console.log('✓ Server is running!');
-    console.log('✓ http://localhost:' + PORT);
+    console.log('Server is running!');
+    console.log('http://localhost:' + PORT);
 });
-
