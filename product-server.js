@@ -8,7 +8,7 @@ app.use(cors());
 app.use(express.json());
 
 //mongodb
-const DB_URL = 'mongodb+srv://raven:12345@test.q3j1urd.mongodb.net/Products';
+const DB_URL = 'mongodb+srv://Johnlee:12345@cluster0.aclepof.mongodb.net/';
 const JWT_SECRET = '12345';
 
 mongoose.connect(DB_URL)
@@ -431,3 +431,4 @@ app.listen(PORT, () => {
     console.log('✓ Server is running!');
     console.log('✓ http://localhost:' + PORT);
 });
+
